@@ -1,0 +1,736 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MUJ Course File Management System - Editable (Updated)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+        <!-- Spreadsheet Library -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/handsontable@14.3.0/dist/handsontable.full.min.css" />
+    <script src="https://cdn.jsdelivr.net/npm/handsontable@14.3.0/dist/handsontable.full.min.js"></script>
+
+   <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+    import { getAuth, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+    import { 
+        getFirestore, doc, setDoc, onSnapshot, getDoc, addDoc, collection, serverTimestamp 
+    } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+    import { 
+        getStorage, ref, uploadBytes, getDownloadURL 
+    } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
+
+        
+        window.firebase = {
+             initializeApp,
+    getAuth,
+    signInWithEmailAndPassword,
+    signOut,
+    getFirestore,
+    doc,
+    setDoc,
+    onSnapshot,
+    getDoc,
+    addDoc,
+    collection,
+    serverTimestamp,
+    getStorage,
+    ref,
+    uploadBytes,
+    getDownloadURL
+        };
+    </script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6;
+        }
+
+        #dashboard-content-wrapper {
+            max-height: calc(100vh - 350px);
+            overflow-y: auto;
+        }
+
+        #data-editor {
+            min-height: 400px;
+            font-family: monospace;
+            line-height: 1.5;
+            font-size: 0.9rem;
+        }
+
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #e5e7eb;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #fb923c;
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #ea580c;
+        }
+    </style>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'muj-orange': '#ea580c'
+                    }
+                }
+            }
+        };
+    </script>
+</head>
+<body class="min-h-screen flex items-center justify-center p-4">
+    <div id="app" class="w-full max-w-7xl bg-white shadow-2xl rounded-2xl p-8 md:p-10 transition-all duration-300 ease-in-out border-t-8 border-muj-orange"></div>
+
+    <div id="message-modal" class="fixed inset-0 bg-gray-900 bg-opacity-75 z-50 hidden flex items-center justify-center p-4" onclick="closeModal()">
+        <div id="modal-content-container" class="bg-white rounded-lg p-6 shadow-xl w-full max-w-sm transform transition-all duration-300 scale-100" onclick="event.stopPropagation()"></div>
+    </div>
+
+    <script>
+        // --- Config & State ---
+        const COLLEGE_NAME = 'MANIPAL UNIVERSITY JAIPUR';
+        const LOGO_URL = 'https://upload.wikimedia.org/wikipedia/en/1/1f/Manipal_University_Jaipur_logo.png';
+        const appId = "muj";
+        // --- Cloudinary Configuration ---
+const CLOUDINARY_CONFIG = {
+    cloudName: "dsv1r5pll",
+    uploadPreset: "muj_unsigned"
+};
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyCc5WBdsW1g1inQWIDu5uTVyQJW_6uD3l0",
+            authDomain: "muj-course-file.firebaseapp.com",
+            projectId: "muj-course-file",
+            storageBucket: "muj-course-file.firebasestorage.app",
+            messagingSenderId: "795930433898",
+            appId: "1:795930433898:web:32ff0f8c4af125b2e1ad13"
+        };
+        
+        let db, auth,storage;
+        let userId = null;
+        let unsubscribeSnapshot = () => {};
+        let currentRole = null;
+        let currentUser = null;
+        let activeTab = 'faculty_profile';
+        let activeSection = null;
+        let currentContent = '';
+        let isSaving = false;
+        let isDataLoading = true;
+
+        const ALL_TABS = [
+            
+            { id: 'faculty_profile', name: 'Faculty Profile (Biodata)', icon: '👤', roles: ['teacher', 'coordinator'], dataKey: 'biodata' },
+            { id: 'timetable', name: 'Timetable of Teaching Faculty', icon: '📅', roles: ['teacher', 'coordinator'], dataKey: 'timetable' },
+            { id: 'course_handout', name: 'Course Handout', icon: '📖', roles: ['teacher', 'coordinator'], dataKey: 'handout' },
+            { id: 'mte_qp', name: 'Mid Term Exam Question Paper', icon: '❓', roles: ['teacher', 'coordinator'], dataKey: 'mte_qp' },
+            { id: 'mte_qp_solution', name: 'MTE Question Paper with Solution', icon: '✅', roles: ['teacher', 'coordinator'], dataKey: 'mte_qp_solution' },
+            { id: 'assignment_quiz_qp', name: 'Assignment and Quiz Question Paper', icon: '✏️', roles: ['teacher', 'coordinator'], dataKey: 'quiz_qp' },
+            { id: 'ese_qp', name: 'End Semester Question Paper', icon: '❓', roles: ['teacher', 'coordinator'], dataKey: 'ese_qp' },
+            { id: 'ese_qp_solution', name: 'End Semester QP with Solution', icon: '✅', roles: ['teacher', 'coordinator'], dataKey: 'ese_qp_solution' },
+            { id: 'sop_slow_advance', name: 'SOP for Slow/Advanced Learner Identification', icon: '📜', roles: ['teacher', 'coordinator'], dataKey: 'sop_id' },
+            { id: 'advance_learner_activities', name: 'Record of Activities/Assignment (Advance Learners)', icon: '⭐', roles: ['teacher', 'coordinator'], dataKey: 'adv_activities' },
+            { id: 'course_exit_survey', name: 'Course Exit Survey', icon: '📝', roles: ['teacher', 'coordinator'], dataKey: 'exit_survey' },
+            { id: 'coordinator_meeting_minutes', name: 'Minutes of Course Coordinator Meeting', icon: '🤝', roles: ['teacher', 'coordinator'], dataKey: 'cc_minutes' },
+            { id: 'course_attainment_report', name: 'Course Attainment Survey Report', icon: '📉', roles: ['teacher', 'coordinator'], dataKey: 'attainment_report' },
+            { id: 'course_closure_report', name: 'Course Closure Report (Remarks & Scope)', icon: '📎', roles: ['teacher', 'coordinator'], dataKey: 'closure_report' },
+            { id: 'student_list_coordinator', name: 'Name List of Students (Section Wise)', icon: '👥', roles: ['coordinator'], dataKey: 'student_list' },
+            { id: 'mte_marks_avg', name: 'MTE Marks (Containing Class Average)', icon: '📊', roles: ['coordinator'], dataKey: 'mte_marks_avg' },
+            { id: 'slow_advance_id', name: 'Identification of Slow Learner and Advance Learner', icon: '🎯', roles: ['coordinator'], dataKey: 'slow_advance' },
+            { id: 'remedial_classes', name: 'Record of Remedial Classes for Slow Learner', icon: '🩹', roles: ['coordinator'], dataKey: 'remedial_classes' },
+            { id: 'cws_internal_assessment', name: 'CWS Internal Assessment Marks (Section Wise)', icon: '💯', roles: ['coordinator'], dataKey: 'cws_marks' },
+            { id: 'attendance_detainees', name: 'Attendance Report and Detainees', icon: '🚨', roles: ['coordinator'], dataKey: 'attendance' },
+            { id: 'ese_marks_report', name: 'End Semester Marks EA Report Section Wise', icon: '📜', roles: ['coordinator'], dataKey: 'grade_sheet' },
+            { id: 'result_analysis_section', name: 'Result Analysis Section Wise (Pass%, Avg. GPA)', icon: '📈', roles: ['coordinator'], dataKey: 'result_analysis' },
+            { id: 'feedback_curriculum', name: 'Feedback by Student on Course Curriculum', icon: '💬', roles: ['coordinator'], dataKey: 'feedback_curriculum' },
+            { id: 'feedback_teaching', name: 'Feedback by Student on Teaching Learning', icon: '📢', roles: ['coordinator'], dataKey: 'feedback_teaching' },
+        ];
+
+        const COURSE_METADATA = {
+            courseCode: "CSE2201",
+            courseName: "DESIGN AND ANALYSIS OF ALGORITHM",
+            programCode: "BTECH-005",
+            branch: "B TECH IN CSE",
+            semester: "IV",
+            academicYear: "2024-25",
+            academicSession: "JAN-MAY 2025"
+        };
+        
+        const MOCK_TEMPLATE_CONTENT = "--- DOCUMENT TEMPLATE ---\n\n[Instructions: Please replace this text with the required content for this document type (e.g., paste your formatted timetable, write your course closure remarks, etc.).]\n\n";
+
+        const COURSE_SECTIONS = {
+            
+            'A': { faculty: { name: "Dr. Ajit Noonia", code: "MUJ1001" }, data: {} },
+            'B': { faculty: { name: "Dr. Mock Faculty", code: "MUJ1002" }, data: {} },
+            'C': { faculty: { name: "Dr. Jassi", code: "MUJ1353" }, data: {} },
+            'D': { faculty: { name: "Archi", code: "MUJ1003" }, data: {} },
+
+        };
+
+        function isExamTab(tabId) {
+            return ['mte_qp','mte_qp_solution','assignment_quiz_qp','ese_qp','ese_qp_solution'].includes(tabId);
+        }
+
+        function showModal(title, message, type='error', isLoader=false) {
+            const modal = document.getElementById('message-modal');
+            const container = document.getElementById('modal-content-container');
+
+            if (isLoader) {
+                container.innerHTML = `<div class="flex flex-col items-center p-8">
+                    <svg class="animate-spin h-8 w-8 text-muj-orange mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    <p class="text-gray-700 font-semibold">${message}</p>
+                </div>`;
+            } else {
+                const titleClasses = type === 'success' ? 'text-green-600' : 'text-red-600';
+                const buttonClasses = type === 'success' ? 'bg-green-600 hover:bg-green-700' : 'bg-red-600 hover:bg-red-700';
+
+                container.innerHTML = `<h3 id="modal-title" class="text-xl font-bold mb-4 ${titleClasses}">${title}</h3>
+                    <p id="modal-content" class="text-gray-700 mb-6">${message}</p>
+                    <button onclick="closeModal()" class="w-full py-2 text-white font-semibold rounded-lg transition-colors ${buttonClasses}">Close</button>`;
+            }
+            modal.classList.remove('hidden');
+        }
+
+        function closeModal() {
+            document.getElementById('message-modal').classList.add('hidden');
+        }
+
+        function renderContent(html) {
+            document.getElementById('app').innerHTML = html;
+        }
+
+        // --- Firebase init ---
+        async function initFirebase() {
+            if (!firebaseConfig) {
+                showModal('Configuration Error', 'Firebase configuration not available. Persistent storage disabled.', 'error');
+                return;
+            }
+            try {
+                const app = firebase.initializeApp(firebaseConfig);
+                db = firebase.getFirestore(app);
+                auth = firebase.getAuth(app);
+                storage = firebase.getStorage(app);
+            } catch (err) {
+                console.error('Firebase init failed', err);
+                showModal('Firebase Error', 'Failed to initialize Firebase.');
+            }
+        }
+
+        function getDocumentRef(section, tabId) {
+            if (!db) return null;
+            const docId = `${COURSE_METADATA.courseCode}-${section}-${tabId}`;
+            return firebase.doc(db, `artifacts/${appId}/public/data/courseFiles`, docId);
+        }
+
+        async function saveData() {
+            if (isSaving || !db || !auth || !currentUser) return;
+            const content = window.hot ? JSON.stringify(window.hot.getData()) : '';
+
+            if (!activeSection || !activeTab) {
+                showModal('Error','No section or tab selected','error');
+                return;
+            }
+
+            const docRef = getDocumentRef(activeSection, activeTab);
+            isSaving = true;
+
+            try {
+                // Write main document with metadata
+
+                await firebase.setDoc(docRef, {
+                    content: content,
+                    lastUpdated: new Date().toISOString(),
+                    updatedBy: currentUser.name,
+                    role: currentRole,
+                    section: activeSection
+                });
+
+                // Append to version history
+                await firebase.addDoc(firebase.collection(db, 'courseFileHistory'), {
+                    courseCode: COURSE_METADATA.courseCode,
+                    tabId: activeTab,
+                    section: activeSection,
+                    content: content,
+                    updatedBy: currentUser.name,
+                    role: currentRole,
+                    updatedAt: firebase.serverTimestamp()
+                });
+
+                showSaveSuccess();
+            } catch (error) {
+                console.error('Error saving', error);
+                showModal('Save Error', `Failed to save data. ${error.message}`, 'error');
+            } finally {
+                isSaving = false;
+            }
+        }
+   async function uploadDocument(input) {
+    if (!input.files.length) return;
+
+    const file = input.files[0];
+
+    if (!currentUser || !activeSection || !activeTab) {
+        showModal('Error', 'Missing user or section info', 'error');
+        return;
+    }
+
+    const docRef = getDocumentRef(activeSection, activeTab);
+
+    showModal('Uploading...', 'Uploading file to cloud...', null, true);
+
+    try {
+        const formData = new FormData();
+        formData.append("file", file);
+        formData.append("upload_preset", CLOUDINARY_CONFIG.uploadPreset);
+       
+        formData.append(
+            "folder",
+            `${COURSE_METADATA.courseCode}/${activeSection}/${activeTab}`
+        );
+
+        const response = await fetch(
+            `https://api.cloudinary.com/v1_1/${CLOUDINARY_CONFIG.cloudName}/auto/upload`,
+
+            {
+                method: "POST",
+                body: formData
+            }
+        );
+
+        const data = await response.json();
+        console.log("Cloudinary response:", data);
+
+
+if (!data.secure_url) {
+    throw new Error(data.error?.message || "Upload failed.");
+}
+
+        // 🔴 IMPORTANT CHECK
+        if (!response.ok || !data.secure_url) {
+            throw new Error(data.error?.message || "Cloudinary upload failed");
+        }
+
+        await firebase.setDoc(docRef, {
+            fileName: file.name,
+          fileURL: data.secure_url,
+
+            uploadedBy: currentUser.name,
+            role: currentRole,
+            section: activeSection,
+            uploadedAt: new Date().toISOString()
+        }, { merge: true });
+
+        closeModal();
+        showModal('Success', 'File uploaded successfully!', 'success');
+
+    } catch (err) {
+        closeModal();
+        console.error(err);
+        showModal('Upload Failed', err.message, 'error');
+    }
+
+    input.value = '';
+}
+
+
+
+
+
+        function showSaveSuccess() {
+            const statusElement = document.getElementById('save-status');
+            if (statusElement) {
+                statusElement.innerHTML = `<span class="text-green-600 font-semibold flex items-center"><span class="mr-2">💾</span> Saved successfully! (${new Date().toLocaleTimeString()})</span>`;
+                setTimeout(()=>{
+                    if(document.getElementById('save-status')) document.getElementById('save-status').innerHTML = '';
+                },4000);
+            }
+        }
+
+        function loadData() {
+            unsubscribeSnapshot();
+           if (!db || !activeSection || !activeTab) {
+    currentContent = {
+        content: MOCK_TEMPLATE_CONTENT
+    };
+    isDataLoading = false;
+    renderTabDetails();
+    return;
+}
+
+            
+            const docRef = getDocumentRef(activeSection, activeTab);
+            isDataLoading = true;
+            renderTabDetails();
+unsubscribeSnapshot = firebase.onSnapshot(
+    docRef,
+    (docSnap) => {
+        isDataLoading = false;
+
+        if (docSnap.exists()) {
+            currentContent = docSnap.data();
+        } else {
+            currentContent = {}; // no file, no text yet
+        }
+
+        renderTabDetails();
+    },
+    (err) => {
+        isDataLoading = false;
+        currentContent = { content: `ERROR: ${err.message}` };
+        renderTabDetails();
+        showModal('DB Error', 'Failed to load realtime data.', 'error');
+    }
+);
+
+        }
+
+        function renderAdminGate(){
+            document.getElementById('app').classList.remove('max-w-7xl');
+            document.getElementById('app').classList.add('max-w-xl');
+
+            unsubscribeSnapshot();
+
+            renderContent(`
+                <div class="text-center mb-8">
+                    <img src="${LOGO_URL}" alt="Logo" class="h-24 w-24 mx-auto mb-4 rounded-xl shadow-lg border-4 border-orange-400">
+                    <h1 class="text-3xl md:text-4xl font-extrabold text-gray-900">${COLLEGE_NAME}</h1>
+                    <h2 class="text-lg text-gray-600 mt-1 font-medium">Course File Management System</h2>
+                </div>
+                <div class="mt-10">
+                    <h3 class="text-xl font-semibold text-gray-700 text-center mb-6">Access Portal</h3>
+                    <button onclick="handleAdminLogin()" class="w-full py-4 bg-muj-orange text-white text-xl font-semibold rounded-xl shadow-lg">🔑 Admin Login</button>
+                </div>
+            `);
+        }
+
+        function renderRoleSelection(){
+            document.getElementById('app').classList.remove('max-w-7xl');
+            document.getElementById('app').classList.add('max-w-xl');
+            
+            renderContent(`
+                <h2 class="text-3xl font-extrabold text-gray-900 text-center mb-6">Select Your Role</h2>
+                <p class="text-center text-gray-500 mb-8">Choose your function to proceed to your personalized dashboard.</p>
+                <div class="space-y-4">
+                    <button onclick="showLoginForm('teacher')" class="w-full py-4 bg-muj-orange text-white text-lg font-semibold rounded-xl">🧑‍🏫 Teacher Login</button>
+                    <button onclick="showLoginForm('coordinator')" class="w-full py-4 bg-muj-orange text-white text-lg font-semibold rounded-xl">📝 Course Coordinator Login</button>
+                </div>
+                <button onclick="logout()" class="mt-8 w-full py-2 text-sm text-gray-600">← Back to College Portal</button>
+            `);
+        }
+
+        function renderLoginForm(){
+            document.getElementById('app').classList.remove('max-w-7xl');
+            document.getElementById('app').classList.add('max-w-xl');
+            const roleDisplay = currentRole ? currentRole.charAt(0).toUpperCase() + currentRole.slice(1) : 'User';
+
+            renderContent(`
+                <h2 class="text-3xl font-extrabold text-gray-900 text-center mb-6">Log in as a <span class="text-muj-orange">${roleDisplay}</span></h2>
+                <p class="text-center text-gray-500 mb-8">Use your MUJ email and password. (domain: @muj.manipal.edu)</p>
+                <form id="login-form" onsubmit="handleUserLogin(event)">
+                    <div class="space-y-6">
+                        <div>
+                            <label for="email" class="block text-sm font-medium text-gray-700 mb-1">Email ID</label>
+                            <input type="email" id="email" name="email" required class="w-full px-4 py-3 border border-gray-300 rounded-lg" placeholder="you@muj.manipal.edu">
+                        </div>
+                        <div>
+                            <label for="password" class="block text-sm font-medium text-gray-700 mb-1">Password</label>
+                            <input type="password" id="password" name="password" required class="w-full px-4 py-3 border border-gray-300 rounded-lg" placeholder="Your password">
+                        </div>
+                    </div>
+                    <button type="submit" class="w-full mt-8 py-3 bg-muj-orange text-white text-lg font-semibold rounded-xl">Access Dashboard</button>
+                </form>
+                <button onclick="renderRoleSelection()" class="mt-8 w-full py-2 text-sm text-gray-600">← Back to Role Selection</button>
+            `);
+        }
+
+        function renderDashboard(){
+            if (!currentUser) {
+                renderAdminGate();
+                return;
+            }
+
+            document.getElementById('app').classList.remove('max-w-xl');
+            document.getElementById('app').classList.add('max-w-7xl');
+
+            const isCoordinator = currentRole === 'coordinator';
+            const userSections = currentUser.sections || ['C'];
+            const filteredTabs = ALL_TABS.filter(t=>t.roles.includes(currentRole));
+
+            if (!activeSection) activeSection = userSections[0];
+            if (!filteredTabs.some(t=>t.id===activeTab)) activeTab = filteredTabs[0].id;
+            
+            loadData();
+
+            const currentSectionInfo = COURSE_SECTIONS[activeSection] || {};
+            const facultyName = currentSectionInfo.faculty?currentSectionInfo.faculty.name:'N/A';
+            const facultyCode = currentSectionInfo.faculty?currentSectionInfo.faculty.code:'N/A';
+
+            let sectionSelectorHtml='';
+            if (isCoordinator) {
+                sectionSelectorHtml = `
+                    <div class="mb-6">
+                        <h4 class="text-sm font-medium text-gray-500 mb-2">Select Section (Viewing All ${userSections.length} Sections)</h4>
+                        <div class="flex flex-wrap gap-2">
+                            ${userSections.map(section=>
+                                `<button onclick="selectSection('${section}')" class="px-4 py-2 text-sm font-semibold rounded-lg ${activeSection===section?'bg-muj-orange text-white shadow-md':'bg-white text-gray-700 border border-gray-300'}">Section ${section}</button>`
+                            ).join('')}
+                        </div>
+                        <p class="text-xs text-orange-500 mt-2">*Section C has the most detailed initial template data.</p>
+                    </div>
+                `;
+            } else {
+                sectionSelectorHtml = `
+                    <div class="mb-6 bg-orange-100 p-4 rounded-xl border border-orange-300">
+                        <h4 class="text-lg font-bold text-muj-orange">Viewing Assigned Section ${activeSection}</h4>
+                        <p class="text-sm text-gray-600">(Access limited to your assigned section and core Course File tabs)</p>
+                    </div>
+                `;
+            }
+
+            const tabListHtml = filteredTabs.map(tab=>{
+                const isActive = activeTab===tab.id;
+                const isHighlighted = isExamTab(tab.id);
+                let classes='text-gray-700 hover:bg-orange-100';
+                if (isActive) classes='bg-muj-orange text-white shadow-lg';
+                else if (isHighlighted) classes='bg-orange-100 text-muj-orange font-bold hover:bg-orange-200';
+                
+                return `<button onclick="selectTab('${tab.id}')" class="w-full flex items-center p-3 text-left font-medium rounded-lg transition-colors duration-200 ${classes}">
+                    <span class="text-lg mr-3">${tab.icon}</span>
+                    <span class="text-sm">${tab.name}</span>
+                </button>`
+            }).join('');
+
+            renderContent(`
+                <div class="flex justify-between items-start border-b pb-4 mb-6">
+                    <div>
+                        <h1 class="text-3xl font-extrabold text-gray-900">Course File: ${COURSE_METADATA.courseName}</h1>
+                        <p class="text-lg text-gray-600">${COURSE_METADATA.programCode} / ${COURSE_METADATA.branch}</p>
+                    </div>
+                    <button onclick="logout()" class="py-2 px-4 bg-gray-200 text-gray-700 text-sm font-semibold rounded-lg hover:bg-gray-300">🚪 Logout (${currentUser.name})</button>
+                </div>
+
+                ${sectionSelectorHtml}
+
+                <div class="flex flex-col md:flex-row gap-6">
+                    <div class="w-full md:w-80 flex-shrink-0 bg-gray-50 p-4 rounded-xl shadow-inner">
+                        <h3 class="text-xl font-bold text-gray-800 mb-4 border-b pb-2">File Contents (${currentRole==='teacher'?'Teacher View':'Coordinator View'})</h3>
+                        <nav class="space-y-1.5">${tabListHtml}</nav>
+                    </div>
+
+                    <div class="flex-grow bg-white p-6 rounded-xl shadow-md border-l-4 border-muj-orange">
+                        <div class="grid grid-cols-2 md:grid-cols-4 gap-y-2 gap-x-6 border-b pb-4 mb-4 text-sm text-gray-700">
+                            <div class="col-span-2 md:col-span-1"><span class="font-bold text-muj-orange">Course Code:</span> ${COURSE_METADATA.courseCode}</div>
+                            <div class="col-span-2 md:col-span-2"><span class="font-bold text-muj-orange">Course Name:</span> ${COURSE_METADATA.courseName}</div>
+                            <div class="col-span-2 md:col-span-1"><span class="font-bold text-muj-orange">Semester:</span> ${COURSE_METADATA.semester}</div>
+
+                            <div class="col-span-2 md:col-span-1"><span class="font-bold text-muj-orange">Faculty Name:</span> ${facultyName}</div>
+                            <div class="col-span-2 md:col-span-1"><span class="font-bold text-muj-orange">Faculty Code:</span> ${facultyCode}</div>
+                            <div class="col-span-2 md:col-span-1"><span class="font-bold text-muj-orange">Section:</span> ${activeSection}</div>
+                            <div class="col-span-2 md:col-span-1"><span class="font-bold text-muj-orange">Academic Session:</span> ${COURSE_METADATA.academicSession}</div>
+                        </div>
+
+                        <h2 class="text-2xl font-bold text-gray-900 mb-4">${ALL_TABS.find(t=>t.id===activeTab).name}</h2>
+                        
+                       <div class="flex flex-wrap gap-3 items-center mb-4 pt-2 border-t">
+
+    <button onclick="saveData()"
+        class="py-2 px-6 bg-green-600 text-white font-semibold rounded-lg shadow-md hover:bg-green-700">
+        💾 Save Text Data
+    </button>
+
+    <label class="py-2 px-6 bg-blue-600 text-white font-semibold rounded-lg shadow-md cursor-pointer hover:bg-blue-700">
+        📎 Upload Document
+        <input type="file"
+               class="hidden"
+               accept=".pdf,.doc,.docx,.xls,.xlsx,.csv"
+               onchange="uploadDocument(this)">
+    </label>
+    
+
+
+    <div id="save-status" class="text-sm"></div>
+                    </div>
+                    <div id="dashboard-content-wrapper"></div>
+                </div>
+            `);
+
+            renderTabDetails();
+        }
+
+      function renderTabDetails() {
+    const wrapper = document.getElementById('dashboard-content-wrapper');
+    if (!wrapper) return;
+
+    const fileURL = currentContent.fileURL;
+    const fileName = currentContent.fileName;
+    const textContent = currentContent.content || "";
+
+    wrapper.innerHTML = `
+       ${fileURL ? `
+<div class="mb-4 p-4 bg-green-50 border border-green-300 rounded-lg">
+    📄 <strong>${fileName}</strong>
+    <a href="${fileURL}" 
+       target="_blank"
+       class="ml-4 text-blue-600 underline">
+       Download
+    </a>
+</div>
+` : ""}
+
+
+       <div id="spreadsheet" class="w-full"></div>
+
+    `;
+   setTimeout(() => {
+    const container = document.getElementById('spreadsheet');
+    if (!container) return;
+
+    let savedData = [];
+
+    if (currentContent && currentContent.content) {
+        try {
+            savedData = JSON.parse(currentContent.content);
+        } catch (e) {
+            savedData = [];
+        }
+    }
+
+    window.hot = new Handsontable(container, {
+        data: savedData.length
+            ? savedData
+            : Handsontable.helper.createEmptySpreadsheetData(20, 8),
+        rowHeaders: true,
+        colHeaders: true,
+        contextMenu: true,
+        dropdownMenu: true,
+        filters: true,
+        stretchH: 'all',
+        height: 400,
+        licenseKey: 'non-commercial-and-evaluation'
+    });
+
+}, 100);
+
+
+
+}
+
+
+
+
+        async function handleAdminLogin(){
+            renderRoleSelection();
+        }
+
+        function showLoginForm(role){
+            currentRole = role;
+            renderLoginForm();
+        }
+
+        async function handleUserLogin(event){
+            event.preventDefault();
+
+            const form = event.target;
+            const emailInput = form.querySelector("#email");
+if (!emailInput || !emailInput.value) {
+    showModal('Error', 'Email field is empty', 'error');
+    return;
+}
+
+const email = emailInput.value.trim().toLowerCase();
+
+            const password = form.password.value;
+
+            // Domain check
+            if (!email.endsWith('@muj.manipal.edu')) {
+                showModal('Invalid Email','Only @muj.manipal.edu addresses are allowed.','error');
+                return;
+            }
+
+            showModal('Connecting...','Signing you in...', null, true);
+
+            try {
+                if (!db || !auth) await initFirebase();
+                
+                const userCred = await firebase.signInWithEmailAndPassword(auth, email, password);
+                userId = userCred.user.uid;
+
+                // fetch user metadata from users collection
+                const userDocRef = firebase.doc(db, 'users', userId);
+                const userSnap = await firebase.getDoc(userDocRef);
+
+                closeModal();
+
+                if (!userSnap.exists()) {
+                    showModal('Access Denied','Your account is not registered in the users collection. Contact admin.','error');
+                    await firebase.signOut(auth);
+                    return;
+                }
+
+                const userData = userSnap.data();
+                currentUser = {
+                    name: userData.name || userCred.user.email.split('@')[0],
+                    email: userCred.user.email,
+                    sections: userData.sections || ['C']
+                };
+                
+                currentRole = userData.role || currentRole || 'teacher';
+                activeSection = currentUser.sections[0];
+                
+                showModal('Login Successful', `Welcome, ${currentUser.name}! You are logged in as a ${currentRole}.`, 'success');
+                renderDashboard();
+
+            } catch (err) {
+                console.error('Login error', err);
+                closeModal();
+                showModal('Login Failed', err.message || 'Sign-in failed.','error');
+            }
+        }
+
+        function selectTab(tabId){
+            activeTab = tabId;
+            renderDashboard();
+        }
+
+        function selectSection(sectionId){
+            activeSection = sectionId;
+            // When section changes, default back to the first allowed tab for the current role
+            const availableTabs = ALL_TABS.filter(tab => tab.roles.includes(currentRole));
+            activeTab = availableTabs[0].id;
+            renderDashboard();
+        }
+
+        async function logout(){
+            try {
+                if(auth) await firebase.signOut(auth);
+            } catch(e){
+                console.warn(e);
+            }
+            currentUser = null;
+            currentRole = null;
+            activeSection = null;
+            activeTab = 'faculty_profile';
+            unsubscribeSnapshot();
+            db=null;
+            renderAdminGate();
+        }
+
+        // --- Init ---
+        document.addEventListener('DOMContentLoaded', async ()=>{
+            await initFirebase();
+            renderAdminGate();
+        });
+    </script>
+</body>
+</html>
+
